@@ -45,6 +45,12 @@ order, so the game cannot change state between the check and the order.
   before any order.
 - If the action uses a target object, the target must be a live game object
   (in `TechnoClass::Array` or `AbstractClass::Array`). It may belong to anyone.
+- If the order carries `object_unique_ids`, it must have one entry per
+  `object_addresses` entry, and each source's live `UniqueID` must equal its
+  entry. If the action uses a target and `target_unique_id` is non-zero, the
+  live target's `UniqueID` must equal it (and `target_object` must be set).
+  A mismatch fails with `order source 0x... was recycled: expected unique_id
+  N, found M` (or `order target ...`). See "Stable entity IDs".
 - A single bad source rejects the whole order before any part of it runs.
   This keeps the all-or-nothing behaviour from `4599971`.
 - `UNIT_ACTION_SELL_CELL`: the building at the target cell
@@ -70,6 +76,8 @@ order, so the game cannot change state between the check and the order.
   (`Production.Value == PRODUCTION_STEPS`). Before, this was checked against the
   snapshot and the snapshot's `current_player`, which is the first house with
   `IsInPlayerControl` and could be null.
+- If `building.unique_id` is non-zero, it must equal the live `UniqueID` of
+  the factory's object (`completed object 0x... was recycled: ...`).
 - The placement checks and the `Place` event use the local house.
 
 ### Command allowlist (`allowedCommands`)
@@ -134,10 +142,11 @@ Commands that must stay out of an agent's allowlist:
 
 ## What it does not guarantee
 
-- **Recycled addresses.** Object addresses are reused after an object is
-  freed. If the agent holds address `P` for unit A, and A dies and a new unit B
-  of the same house is allocated at `P`, an order for `P` passes every check
-  and moves B. See "Stable entity IDs" below.
+- **Recycled addresses, for clients that do not send IDs.** Object addresses
+  are reused after an object is freed. If the agent holds address `P` for unit
+  A, and A dies and a new unit B of the same house is allocated at `P`, an
+  order for `P` without `object_unique_ids` passes every check and moves B. The
+  IDs are optional; see "Stable entity IDs" below.
 - **Event latency.** `ClickedMission`/`ClickedEvent`, `Produce`, `Place` and
   `SellCell` are network events. They execute several frames later
   (`MaxAhead`/`FrameSendRate`). ra2yrcpp checks ownership when it issues an
@@ -186,7 +195,7 @@ an address the agent stored some frames ago may now belong to a different
 object. The live ownership check stops orders for foreign units, but not for a
 newer unit of the same house at the same address.
 
-### Proposed design
+### Implementation
 
 The engine already has a stable ID. Every `AbstractClass` has a `UniqueID`
 (`DWORD`, YRpp `AbstractClass.h`), assigned as
@@ -194,7 +203,8 @@ The engine already has a stable ID. Every `AbstractClass` has a `UniqueID`
 monotonically within a scenario and is never reused, which avoids keeping a
 separate creation-frame counter.
 
-Proto fields to add to ra2yrproto:
+ra2yrproto fields (bayleafwalker/ra2yrproto `feat/stable-ids`; the numbers
+were free and not reserved at shmocz/ra2yrproto `0ad7245`):
 
 ```proto
 // ra2yr.proto
@@ -212,7 +222,7 @@ message Factory {
 message UnitOrder {
   // ...existing fields...
   // If non-empty, must have the same length as object_addresses; element i
-  // is the UniqueID the client saw at object_addresses[i].
+  // is the Object.unique_id the client saw at object_addresses[i].
   repeated uint32 object_unique_ids = 5;
   uint32 target_unique_id = 6;  // 0 = not checked
 }
@@ -221,24 +231,49 @@ message UnitOrder {
 `PlaceBuilding.building` is already an `Object`, so it gets `unique_id` for
 free.
 
-C++ changes once the fields exist:
+ra2yrcpp:
 
-1. `ClassParser::Object()` sets `unique_id` from
-   `reinterpret_cast<AbstractClass*>(src)->UniqueID`. `parse_Factories` sets
-   `object_unique_id` in the same way.
-2. `live_owned_techno` takes an optional expected ID and rejects the source
-   when `T->UniqueID != expected`, with a "recycled" error. `UnitOrderCtx`
-   passes `object_unique_ids[i]`, and a length mismatch rejects the order. The
-   target check compares `target_unique_id` in the same way. `place_building`
-   compares `building.unique_id` with the factory object's `UniqueID`.
-3. The check is only required when the field is set, so old clients keep
-   working. The Bindery adapter would always send it. Once every client sends
-   it, a config switch (for example `requireUniqueIds`) could make it
-   mandatory.
+1. `ClassParser::Object()` sets `unique_id` from `ObjectClass::UniqueID`, so
+   every object in `GetGameState` carries it. `parse_Factories` sets
+   `object_unique_id` from `Factory.Object`, or 0 if there is none.
+2. `UnitOrderCtx::perform` runs the existing live checks (sources exist, are
+   alive, owned, legal mission; target exists), then
+   `seat_checks::check_unit_order_unique_ids`, then issues the order. A length
+   mismatch, a source whose live `UniqueID` differs from its entry, or a
+   target whose live `UniqueID` differs from `target_unique_id` rejects the
+   whole order before anything is issued. A source entry of 0 is compared like
+   any other value, not skipped. The target ID is ignored for actions that do
+   not use a target (`STOP`).
+3. `place_building` compares a non-zero `building.unique_id` with the live
+   factory object's `UniqueID`.
+4. The comparison logic is in `src/seat_checks.cpp` (part of
+   `ra2yrcpp_core`, no game headers) and is unit-tested natively in
+   `tests/test_seat_checks.cpp`. The game-memory lookups around it are only
+   compiled for the DLL and have not been run in game.
 
-### What can be done without proto changes
+The IDs are only checked when present, so old clients keep working. The
+Bindery adapter should always send them: copy `Object.unique_id` from the same
+snapshot the address came from.
 
-Only partial measures are possible, and none is implemented:
+### What remains
+
+- **Optional, not enforced.** A client that omits the IDs gets the old
+  behaviour. A config switch (for example `requireUniqueIds`) could make them
+  mandatory once every client sends them. It is not implemented.
+- **`SELL_CELL`** names a cell, not an object. The building is resolved from
+  the live cell at issue time, so there is no stored address to go stale;
+  `object_unique_ids` is not used for it.
+- **`ProduceOrder`** names a type class, which is never freed, so it needs no
+  ID.
+- **Event latency** (see above) is unchanged: the ID is checked when the event
+  is issued, not when it executes.
+- **Submodule.** `src/protocol/ra2yrproto` points at the bayleafwalker fork
+  until the fields are upstream.
+
+### Without the IDs (older clients)
+
+For clients that do not send the IDs, only partial measures are possible, and
+none is implemented:
 
 - The server cannot tell which object the agent meant, because the request
   carries nothing but the address. An in-process map from address to

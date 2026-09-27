@@ -47,6 +47,7 @@ void Cell::copy_to(ra2yrproto::ra2yr::Cell* dst, const Cell* src) {
 
 void ClassParser::Object() {
   auto* P = reinterpret_cast<ObjectClass*>(c.src);
+  T->set_unique_id(P->UniqueID);
   T->set_health(P->Health);
   T->set_selected(P->IsSelected);
   T->set_in_limbo(P->InLimbo);
@@ -589,6 +590,7 @@ void ra2::parse_Factories(
     auto* I = D->Items[i];
     auto& O = dst->at(i);
     O.set_object(reinterpret_cast<u32>(I->Object));
+    O.set_object_unique_id(I->Object != nullptr ? I->Object->UniqueID : 0U);
     O.set_owner(reinterpret_cast<u32>(I->Owner));
     O.set_progress_timer(I->Production.Value);
     O.set_on_hold(I->OnHold);
