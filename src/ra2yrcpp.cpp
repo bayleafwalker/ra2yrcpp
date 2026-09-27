@@ -85,6 +85,14 @@ void Main::start_service() {
     o.server.allowed_hosts_regex = cfg_->c().allowed_hosts_regex;
     o.server.port = cfg_->c().port;
     o.server.max_connections = cfg_->c().max_connections;
+    if (cfg_->c().allowed_commands.has_value()) {
+      const auto& A = *cfg_->c().allowed_commands;
+      o.allowed_commands.emplace(A.begin(), A.end());
+      iprintf("allowedCommands active, {} entries", A.size());
+      for (const auto& name : A) {
+        iprintf("allowed command: {}", name);
+      }
+    }
     service_ = is_context::make_is(o);
   }
 }

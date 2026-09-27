@@ -8,6 +8,7 @@
 #include "command/command_manager.hpp"
 #include "command/is_command.hpp"
 #include "commands_builtin.hpp"
+#include "config.hpp"
 #include "constants.hpp"
 #include "instrumentation_client.hpp"
 #include "instrumentation_service.hpp"
@@ -35,6 +36,7 @@
 #include <future>
 #include <memory>
 #include <regex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,6 +57,9 @@ class InstrumentationServiceTest : public ::testing::Test {
   void TearDown() override;
 
   virtual void init() = 0;
+
+  virtual InstrumentationService::Options options() { return default_options; }
+
   std::unique_ptr<asio_utils::IOService> srv;
   std::shared_ptr<conn_t> conn;
   std::unique_ptr<InstrumentationService> I;
@@ -63,7 +68,7 @@ class InstrumentationServiceTest : public ::testing::Test {
 };
 
 void InstrumentationServiceTest::SetUp() {
-  InstrumentationService::Options O = default_options;
+  InstrumentationService::Options O = options();
 
   srv = std::make_unique<asio_utils::IOService>();
   I = std::unique_ptr<InstrumentationService>(InstrumentationService::create(
@@ -151,6 +156,77 @@ TEST_F(NewCommandsTest, BasicCommandTest) {
   ASSERT_EQ(resp.code(), ra2yrproto::ResponseCode::OK);
   auto cmds = client->poll_blocking(5.0s);
   ASSERT_EQ(cmds.result().results().size(), 1);
+}
+
+class AllowlistTest : public InstrumentationServiceTest {
+ protected:
+  void init() override {}
+
+  InstrumentationService::Options options() override {
+    auto O = default_options;
+    // One full type name, one bare message name.
+    O.allowed_commands = std::set<std::string>{"ra2yrproto.commands.StoreValue",
+                                               "GetSystemState"};
+    return O;
+  }
+};
+
+TEST_F(AllowlistTest, RejectsUnlistedCommands) {
+  ASSERT_TRUE(I->is_command_allowed("ra2yrproto.commands.StoreValue"));
+  ASSERT_TRUE(I->is_command_allowed("ra2yrproto.commands.GetSystemState"));
+  ASSERT_FALSE(I->is_command_allowed("ra2yrproto.commands.GetValue"));
+  ASSERT_FALSE(I->is_command_allowed("GetValue"));
+
+  // Listed command runs.
+  (void)cs->run(StoreValue::create({"key", "val"}));
+
+  // Unlisted command is refused at submission, before it is queued.
+  auto resp = client->send_command(GetValue::create({"key", ""}),
+                                   ra2yrproto::CLIENT_COMMAND);
+  ASSERT_EQ(resp.code(), ra2yrproto::ResponseCode::ERROR);
+  auto msg = protocol::from_any<ra2yrproto::TextResponse>(resp.body());
+  ASSERT_NE(msg.message().find("allowedCommands"), std::string::npos);
+  ASSERT_NE(msg.message().find("ra2yrproto.commands.GetValue"),
+            std::string::npos);
+}
+
+TEST_F(IServiceTest, NoAllowlistAllowsEverything) {
+  ASSERT_TRUE(I->is_command_allowed("ra2yrproto.commands.GetValue"));
+  ASSERT_TRUE(I->is_command_allowed("anything"));
+}
+
+TEST(ConfigTest, AllowedCommands) {
+  {
+    auto C = config::ConfigData::parse("{\"port\": 14600}");
+    ASSERT_FALSE(C.allowed_commands.has_value());
+    ASSERT_EQ(C.port, 14600U);
+  }
+  {
+    auto C = config::ConfigData::parse(
+        "{\"port\": 14600, \"allowedHostsRegex\": \"127\\\\.0\\\\.0\\\\.1\", "
+        "\"allowedCommands\": [\"UnitOrder\", "
+        "\"ra2yrproto.commands.GetGameState\"]}");
+    ASSERT_TRUE(C.allowed_commands.has_value());
+    ASSERT_EQ(C.allowed_commands->size(), 2U);
+    ASSERT_EQ(C.allowed_commands->at(0), "UnitOrder");
+    ASSERT_EQ(C.allowed_commands->at(1), "ra2yrproto.commands.GetGameState");
+    // Other settings survive the allowlist being stripped.
+    ASSERT_EQ(C.port, 14600U);
+    ASSERT_EQ(C.allowed_hosts_regex, "127\\.0\\.0\\.1");
+  }
+  {
+    // Present but empty: nothing is allowed.
+    auto C = config::ConfigData::parse("{\"allowed_commands\": []}");
+    ASSERT_TRUE(C.allowed_commands.has_value());
+    ASSERT_TRUE(C.allowed_commands->empty());
+  }
+  ASSERT_THROW(
+      (void)config::ConfigData::parse("{\"allowedCommands\": \"UnitOrder\"}"),
+      std::runtime_error);
+  ASSERT_THROW((void)config::ConfigData::parse("{\"allowedCommands\": [1]}"),
+               std::runtime_error);
+  ASSERT_THROW((void)config::ConfigData::parse("{\"notASetting\": 1}"),
+               std::runtime_error);
 }
 
 TEST_F(IServiceTest, TestHTTPRequest) {
