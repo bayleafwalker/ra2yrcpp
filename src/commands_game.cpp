@@ -149,9 +149,24 @@ struct UnitOrderCtx {
   }
 
   void perform() {
+    const auto* player = ctx_->current_player();
+    if (player == nullptr) {
+      throw std::runtime_error("unit order requires a local player");
+    }
+
     if (uo().action() == r2p::UnitAction::UNIT_ACTION_SELL_CELL) {
       unit_action();
     } else {
+      // Check every source before issuing any order. The caller controls the
+      // object address field, and an observer receives addresses for both
+      // sides. A mixed list must not partially execute before a foreign unit
+      // is rejected.
+      for (const auto k : uo().object_addresses()) {
+        const auto* object = ctx_->get_object(k);
+        if (object->in_limbo() || object->pointer_house() != player->self()) {
+          throw std::runtime_error("unit order source is not owned by the local player");
+        }
+      }
       for (const auto k : uo().object_addresses()) {
         src_object_ = ctx_->get_object_entry([&](const auto& v) {
                             return v.o->pointer_self() == k && !v.o->in_limbo();
