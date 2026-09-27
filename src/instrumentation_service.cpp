@@ -67,6 +67,10 @@ static std::tuple<command_hdl_t, ra2yrproto::RunCommandAck> handle_cmd(
   auto client_cmd = cmd->command();
   // Get trailing portion of protobuf type url
   auto name = ra2yrcpp::split_string(client_cmd.type_url(), "/").back();
+  if (!I->is_command_allowed(name)) {
+    throw std::runtime_error(
+        fmt::format("command not permitted by allowedCommands: {}", name));
+  }
   ra2yrproto::RunCommandAck ack;
 
   auto c = I->cmd_manager().make_command(
@@ -128,6 +132,19 @@ ra2yrproto::Response InstrumentationService::process_request(
       throw std::runtime_error("unknown command: " +
                                std::to_string(cmd.command_type()));
   }
+}
+
+bool InstrumentationService::is_command_allowed(const std::string& name) const {
+  const auto& A = opts_.allowed_commands;
+  if (!A.has_value()) {
+    return true;
+  }
+  if (A->count(name) > 0U) {
+    return true;
+  }
+  // Also accept the bare message name, e.g. "UnitOrder".
+  const auto pos = name.rfind('.');
+  return pos != std::string::npos && A->count(name.substr(pos + 1)) > 0U;
 }
 
 std::string InstrumentationService::on_shutdown() {

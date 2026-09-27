@@ -14,6 +14,8 @@ Download the [latest release](https://github.com/shmocz/ra2yrcpp/releases/downlo
 }
 ```
 
+Optionally, `"allowedCommands": ["GetGameState", "UnitOrder", ...]` restricts the service to the listed commands (full type names like `ra2yrproto.commands.UnitOrder` or bare message names). Without the key every command is available. See [docs/bindery-seat-boundary.md](docs/bindery-seat-boundary.md).
+
 ### Method 1: Syringe + yrpp-spawner
 
 This is the recommended way to use existing game files from [CnCNet YR client package](https://github.com/CnCNet/cncnet-yr-client-package).
