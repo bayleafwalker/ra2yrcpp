@@ -25,6 +25,7 @@ add_library(
   logging.cpp
   multi_client.cpp
   process.cpp
+  seat_checks.cpp
   utility/sync.cpp
   websocket_connection.cpp
   websocket_server.cpp

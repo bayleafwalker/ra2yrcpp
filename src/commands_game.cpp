@@ -11,6 +11,7 @@
 #include "ra2/common.hpp"
 #include "ra2/state_context.hpp"
 #include "ra2/yrpp_export.hpp"
+#include "seat_checks.hpp"
 #include "types.h"
 
 #include <fmt/core.h>
@@ -68,20 +69,35 @@ TechnoClass* find_live_techno(std::uintptr_t address) {
   return nullptr;
 }
 
-/// Return true if address is a live game object (any owner). Used for order
-/// targets, which the game dereferences, so a forged or dangling target must
-/// be rejected before it reaches the game.
-bool is_live_abstract(std::uintptr_t address) {
-  if (find_live_techno(address) != nullptr) {
-    return true;
+/// Resolve an address to a live game object (any owner), or nullptr. Used for
+/// order targets, which the game dereferences, so a forged or dangling target
+/// must be rejected before it reaches the game.
+AbstractClass* find_live_abstract(std::uintptr_t address) {
+  if (auto* T = find_live_techno(address)) {
+    return T;
   }
   auto* A = AbstractClass::Array.get();
   for (int i = 0; i < A->Count; i++) {
     if (reinterpret_cast<std::uintptr_t>(A->Items[i]) == address) {
-      return true;
+      return A->Items[i];
     }
   }
-  return false;
+  return nullptr;
+}
+
+bool is_live_abstract(std::uintptr_t address) {
+  return find_live_abstract(address) != nullptr;
+}
+
+/// UniqueID of a live object. Only called for addresses already validated as
+/// live in the same game-thread callback.
+std::uint32_t live_unique_id(std::uintptr_t address) {
+  const auto* A = find_live_abstract(address);
+  if (A == nullptr) {
+    throw std::runtime_error(
+        fmt::format("order object {:#x} does not exist", address));
+  }
+  return static_cast<std::uint32_t>(A->UniqueID);
 }
 
 /// Return the live object at address if it exists, is alive, is not in limbo
@@ -256,6 +272,11 @@ struct UnitOrderCtx {
       }
       sources.push_back(k);
     }
+    // Addresses are reused after an object is freed. If the client sent the
+    // UniqueIDs it saw, make sure every source and the target is still that
+    // object.
+    ra2yrcpp::seat_checks::check_unit_order_unique_ids(
+        uo(), requires_target_object(), live_unique_id);
     for (const auto k : sources) {
       src_ = k;
       unit_action();
@@ -338,6 +359,9 @@ auto place_building() {
             "player",
             address));
       }
+      ra2yrcpp::seat_checks::check_unique_id(
+          "completed object", address, args.building().unique_id(),
+          static_cast<std::uint32_t>(factory->Object->UniqueID));
 
       // The type class of an object never changes, so the snapshot is fine here.
       const ra2::ObjectEntry OE = ctx->get_object_entry(address);
