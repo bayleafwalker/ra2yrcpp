@@ -16,6 +16,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -44,6 +46,9 @@ class InstrumentationService {
  public:
   struct Options {
     WebsocketServer::Options server;
+    /// If set, only commands named here may be executed (see
+    /// config::ConfigData::allowed_commands). Unset allows every command.
+    std::optional<std::set<std::string>> allowed_commands{};
   };
 
   /// @param opt options
@@ -85,6 +90,11 @@ class InstrumentationService {
   ra2yrproto::Response process_request(int socket_id, vecu8* bytes,
                                        bool* is_json);
   std::string on_shutdown();
+
+  /// Check a command name (the protobuf type name, e.g.
+  /// "ra2yrproto.commands.UnitOrder") against the configured allowlist.
+  /// Always true when no allowlist is configured.
+  bool is_command_allowed(const std::string& name) const;
 
  private:
   ra2yrproto::PollResults flush_results(

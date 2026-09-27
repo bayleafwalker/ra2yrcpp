@@ -11,6 +11,8 @@
 !/data/**
 !/docker
 !/docker/**
+!/docs
+!/docs/**
 !/pyra2yr
 !/pyra2yr/**
 !/scripts

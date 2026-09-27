@@ -6,12 +6,69 @@
 #include "protocol/helpers.hpp"
 #include "util_string.hpp"
 
+#include <fmt/core.h>
+#include <google/protobuf/struct.pb.h>
+
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace ra2yrcpp::config;
 
+namespace gpb = google::protobuf;
+
+// Keys accepted for the command allowlist. The camelCase form matches the
+// JSON names of the other settings; the snake_case form matches the field
+// naming that the protobuf JSON parser also accepts for them.
+static constexpr const char* ALLOWED_COMMANDS_KEYS[] = {"allowedCommands",
+                                                        "allowed_commands"};
+
+// Remove the allowlist from the JSON document, if present, and return it. The
+// key is not a field of ra2yrproto::commands::Configuration, whose JSON parser
+// rejects unknown keys, so it is extracted here before that parse.
+static std::optional<std::vector<std::string>> take_allowed_commands(
+    std::string* json) {
+  gpb::Struct root;
+  if (!ra2yrcpp::protocol::from_json(*json, &root)) {
+    throw std::runtime_error("Failed to parse configuration");
+  }
+  auto* fields = root.mutable_fields();
+  std::optional<std::vector<std::string>> res;
+  for (const auto* key : ALLOWED_COMMANDS_KEYS) {
+    auto it = fields->find(key);
+    if (it == fields->end()) {
+      continue;
+    }
+    if (res.has_value()) {
+      throw std::runtime_error(
+          "Configuration: allowedCommands specified more than once");
+    }
+    if (it->second.kind_case() != gpb::Value::kListValue) {
+      throw std::runtime_error(
+          fmt::format("Configuration: {} must be a list of strings", key));
+    }
+    std::vector<std::string> names;
+    for (const auto& v : it->second.list_value().values()) {
+      if (v.kind_case() != gpb::Value::kStringValue ||
+          v.string_value().empty()) {
+        throw std::runtime_error(fmt::format(
+            "Configuration: {} entries must be non-empty strings", key));
+      }
+      names.push_back(v.string_value());
+    }
+    res = std::move(names);
+    fields->erase(it);
+  }
+  if (res.has_value()) {
+    *json = ra2yrcpp::protocol::to_json(root);
+  }
+  return res;
+}
+
 ConfigData ConfigData::parse(std::string json) {
+  auto allowed_commands = take_allowed_commands(&json);
   ra2yrproto::commands::Configuration C;
   if (!ra2yrcpp::protocol::from_json(ra2yrcpp::to_bytes(json), &C)) {
     throw std::runtime_error("Failed to parse configuration");
@@ -23,7 +80,7 @@ ConfigData ConfigData::parse(std::string json) {
                 C.traffic_filename(), C.parse_map_data_interval(),
                 C.single_step(),      C.port(),
                 C.max_connections(),  C.allowed_hosts_regex(),
-                C.log_filename()};
+                C.log_filename(),     allowed_commands};
 
   if (CC.max_connections == 0) {
     CC.max_connections = defaults.max_connections;
