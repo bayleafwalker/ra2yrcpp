@@ -195,6 +195,26 @@ TEST_F(IServiceTest, NoAllowlistAllowsEverything) {
   ASSERT_TRUE(I->is_command_allowed("anything"));
 }
 
+TEST(ConfigTest, DeferServiceStart) {
+  // Off unless asked for: the service starts at ExeRun, as before.
+  ASSERT_FALSE(config::ConfigData::parse("{\"port\": 14600}").defer_service_start);
+  {
+    auto C = config::ConfigData::parse(
+        "{\"port\": 14600, \"deferServiceStart\": true, "
+        "\"allowedCommands\": [\"UnitOrder\"]}");
+    ASSERT_TRUE(C.defer_service_start);
+    // Other settings, and the allowlist, survive the key being stripped.
+    ASSERT_EQ(C.port, 14600U);
+    ASSERT_TRUE(C.allowed_commands.has_value());
+  }
+  ASSERT_TRUE(
+      config::ConfigData::parse("{\"defer_service_start\": true}").defer_service_start);
+  ASSERT_FALSE(
+      config::ConfigData::parse("{\"deferServiceStart\": false}").defer_service_start);
+  ASSERT_THROW((void)config::ConfigData::parse("{\"deferServiceStart\": 1}"),
+               std::runtime_error);
+}
+
 TEST(ConfigTest, AllowedCommands) {
   {
     auto C = config::ConfigData::parse("{\"port\": 14600}");

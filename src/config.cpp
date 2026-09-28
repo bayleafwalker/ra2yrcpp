@@ -67,8 +67,43 @@ static std::optional<std::vector<std::string>> take_allowed_commands(
   return res;
 }
 
+// Keys for deferring the service start to the first game frame; not a field of
+// the Configuration message either, so it is taken out the same way.
+static constexpr const char* DEFER_SERVICE_START_KEYS[] = {
+    "deferServiceStart", "defer_service_start"};
+
+static bool take_defer_service_start(std::string* json) {
+  gpb::Struct root;
+  if (!ra2yrcpp::protocol::from_json(*json, &root)) {
+    throw std::runtime_error("Failed to parse configuration");
+  }
+  auto* fields = root.mutable_fields();
+  std::optional<bool> res;
+  for (const auto* key : DEFER_SERVICE_START_KEYS) {
+    auto it = fields->find(key);
+    if (it == fields->end()) {
+      continue;
+    }
+    if (res.has_value()) {
+      throw std::runtime_error(
+          "Configuration: deferServiceStart specified more than once");
+    }
+    if (it->second.kind_case() != gpb::Value::kBoolValue) {
+      throw std::runtime_error(
+          fmt::format("Configuration: {} must be true or false", key));
+    }
+    res = it->second.bool_value();
+    fields->erase(it);
+  }
+  if (res.has_value()) {
+    *json = ra2yrcpp::protocol::to_json(root);
+  }
+  return res.value_or(false);
+}
+
 ConfigData ConfigData::parse(std::string json) {
   auto allowed_commands = take_allowed_commands(&json);
+  const bool defer_service_start = take_defer_service_start(&json);
   ra2yrproto::commands::Configuration C;
   if (!ra2yrcpp::protocol::from_json(ra2yrcpp::to_bytes(json), &C)) {
     throw std::runtime_error("Failed to parse configuration");
@@ -81,6 +116,7 @@ ConfigData ConfigData::parse(std::string json) {
                 C.single_step(),      C.port(),
                 C.max_connections(),  C.allowed_hosts_regex(),
                 C.log_filename(),     allowed_commands};
+  CC.defer_service_start = defer_service_start;
 
   if (CC.max_connections == 0) {
     CC.max_connections = defaults.max_connections;

@@ -380,6 +380,15 @@ DEFINE_HOOK(0x55de4f, GameLoopBegin, 0x7) {
   (void)R;
   auto [mut, M] = MainData::acquire();
 
+  // With deferServiceStart, the service (and its threads) starts here, on the
+  // first game frame, instead of at ExeRun while the game is still starting.
+  static bool service_started = false;
+  if (!service_started &&
+      ra2yrcpp::Main::get()->config().c().defer_service_start) {
+    ra2yrcpp::Main::get()->start_service();
+  }
+  service_started = true;
+
   // Save state
   StateSave::get()->execute();
 
@@ -405,7 +414,9 @@ DEFINE_HOOK(0x7cd84d, ExeRun, 0x9) {
   auto [mut, M] = MainData::acquire();
   ra2yrcpp::Main::get()->load_configuration(cfg::CONFIG_FILE_NAME);
   M->initialize_service_datas();
-  ra2yrcpp::Main::get()->start_service();
+  if (!ra2yrcpp::Main::get()->config().c().defer_service_start) {
+    ra2yrcpp::Main::get()->start_service();
+  }
 
 #ifndef NDEBUG
   (void)windows_utils::debugger_detach();

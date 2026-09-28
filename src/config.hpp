@@ -25,6 +25,10 @@ struct ConfigData {
   /// Not part of the ra2yrproto Configuration message, so it is not reported
   /// or changeable through InspectConfiguration.
   std::optional<std::vector<std::string>> allowed_commands{};
+  /// Start the service on the first GameLoopBegin instead of at ExeRun, read
+  /// from the "deferServiceStart" key (default false). Like allowedCommands,
+  /// not part of the ra2yrproto Configuration message.
+  bool defer_service_start{false};
   ConfigData() = delete;
 
   /// Parse configuration from JSON string.
