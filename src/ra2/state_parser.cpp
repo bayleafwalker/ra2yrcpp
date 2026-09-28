@@ -153,6 +153,7 @@ TypeClassParser::TypeClassParser(Cookie c,
 void TypeClassParser::AbstractType() {
   auto* P = reinterpret_cast<AbstractTypeClass*>(c.src);
   T->set_name(P->Name);
+  T->set_id(P->ID);
 }
 
 void TypeClassParser::AircraftType() {
